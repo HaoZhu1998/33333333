@@ -1,385 +1,626 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  BarChart, 
-  Bar, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip, 
-  Legend, 
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  ReferenceLine
-} from 'recharts';
-import { 
-  TrendingUp, 
-  TrendingDown, 
-  Activity, 
-  Sliders, 
-  PieChart, 
-  DollarSign, 
-  RefreshCw,
-  Info
-} from 'lucide-react';
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Jonathan Nina & Co Capital DCF 模型</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-const DCFModel = () => {
-  // --- 初始状态与配置 ---
-  const [scenario, setScenario] = useState('base');
-  
-  // 输入参数 (驱动因素)
-  const [inputs, setInputs] = useState({
-    wacc: 8.5,             // %
-    terminalGrowth: 2.0,   // %
-    revenueGrowth: 5.0,    // % (预测期复合增长率)
-    baseFCF: 100,          // $M (起始自由现金流)
-    netDebt: 250,          // $M
-    sharesOutstanding: 50  // M (百万股)
-  });
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
 
-  // 情景配置
-  const scenarios = {
-    base: { wacc: 8.5, terminalGrowth: 2.0, revenueGrowth: 5.0, label: '基准情景 (Base)' },
-    bull: { wacc: 7.5, terminalGrowth: 2.5, revenueGrowth: 8.0, label: '乐观情景 (Bull)' },
-    bear: { wacc: 10.0, terminalGrowth: 1.0, revenueGrowth: 2.0, label: '悲观情景 (Bear)' },
-  };
+    <!-- Babel (让浏览器直接运行 JSX) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-  // 切换情景逻辑
-  const applyScenario = (type) => {
-    setScenario(type);
-    setInputs(prev => ({
-      ...prev,
-      wacc: scenarios[type].wacc,
-      terminalGrowth: scenarios[type].terminalGrowth,
-      revenueGrowth: scenarios[type].revenueGrowth
-    }));
-  };
+    <!-- Recharts 图表库 -->
+    <script src="https://unpkg.com/recharts/umd/Recharts.min.js"></script>
 
-  // 处理滑块变更
-  const handleInputChange = (key, value) => {
-    setInputs(prev => ({ ...prev, [key]: parseFloat(value) }));
-    setScenario('custom'); // 如果用户手动调整，切换到自定义情景
-  };
-
-  // --- 核心 DCF 计算引擎 ---
-  const calculation = useMemo(() => {
-    const { wacc, terminalGrowth, revenueGrowth, baseFCF, netDebt, sharesOutstanding } = inputs;
-    
-    // 预测期 (5年)
-    let projectedFCF = [];
-    let currentFCF = baseFCF;
-    let sumPV_FCF = 0;
-
-    for (let i = 1; i <= 5; i++) {
-      currentFCF = currentFCF * (1 + revenueGrowth / 100);
-      const discountFactor = 1 / Math.pow((1 + wacc / 100), i);
-      const pv = currentFCF * discountFactor;
-      sumPV_FCF += pv;
-      
-      projectedFCF.push({
-        year: `第 ${i} 年`,
-        fcf: Math.round(currentFCF),
-        pv: Math.round(pv)
-      });
-    }
-
-    // 终值 (戈登增长模型)
-    // TV = FCF_final * (1 + g) / (WACC - g)
-    // 防止 WACC <= g 导致数学错误
-    const effectiveWacc = Math.max(wacc, terminalGrowth + 0.1); 
-    const finalFCF = projectedFCF[4].fcf;
-    const terminalValue = (finalFCF * (1 + terminalGrowth / 100)) / ((effectiveWacc - terminalGrowth) / 100);
-    
-    const pvTerminalValue = terminalValue / Math.pow((1 + effectiveWacc / 100), 5);
-
-    // 企业价值 & 股权价值
-    const enterpriseValue = sumPV_FCF + pvTerminalValue;
-    const equityValue = enterpriseValue - netDebt;
-    const sharePrice = equityValue / sharesOutstanding;
-
-    return {
-      projectedFCF,
-      sumPV_FCF,
-      terminalValue,
-      pvTerminalValue,
-      enterpriseValue,
-      equityValue,
-      sharePrice,
-      mix: {
-        fcfPct: (sumPV_FCF / enterpriseValue) * 100,
-        tvPct: (pvTerminalValue / enterpriseValue) * 100
+    <!-- 简单样式，可以按需要再调 -->
+    <style>
+      * {
+        box-sizing: border-box;
       }
-    };
-  }, [inputs]);
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Helvetica, Arial, sans-serif;
+        background: #f3f4f6;
+        color: #111827;
+      }
+      .app {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 24px 16px 40px;
+      }
+      h1 {
+        font-size: 26px;
+        margin: 0 0 4px;
+      }
+      .sub-title {
+        color: #6b7280;
+        font-size: 14px;
+        margin-bottom: 20px;
+      }
+      .scenario-tabs {
+        display: flex;
+        gap: 8px;
+        margin: 16px 0 20px;
+        flex-wrap: wrap;
+      }
+      .scenario-btn {
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: 1px solid #d1d5db;
+        background: #ffffff;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .scenario-btn.active {
+        background: #1d4ed8;
+        color: #ffffff;
+        border-color: #1d4ed8;
+      }
 
-  // --- 敏感性分析矩阵生成器 ---
-  const sensitivityMatrix = useMemo(() => {
-    const waccSteps = [-1, -0.5, 0, 0.5, 1]; // 相对当前输入的步长
-    const growthSteps = [-0.5, 0, 0.5];       // 相对当前输入的步长
-    
-    const matrix = growthSteps.map(gStep => {
-      const g = inputs.terminalGrowth + gStep;
-      const row = { growth: g.toFixed(1) };
-      
-      waccSteps.forEach(wStep => {
-        const w = inputs.wacc + wStep;
-        
-        // 快速计算单元格数据 (简化逻辑复用)
-        const effectiveWacc = Math.max(w, g + 0.1);
-        
-        let sumPV = 0;
-        let cFCF = inputs.baseFCF;
-        for(let i=1; i<=5; i++){
-            cFCF = cFCF * (1 + inputs.revenueGrowth/100);
-            sumPV += cFCF / Math.pow((1 + w/100), i);
+      .grid-3 {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+      }
+      @media (max-width: 900px) {
+        .grid-3 {
+          grid-template-columns: 1fr;
         }
-        const termVal = (cFCF * (1 + g/100)) / ((effectiveWacc - g)/100);
-        const pvTerm = termVal / Math.pow((1 + effectiveWacc/100), 5);
-        const ev = sumPV + pvTerm;
-        const eq = ev - inputs.netDebt;
-        const price = eq / inputs.sharesOutstanding;
-        
-        row[`wacc_${w.toFixed(1)}`] = price > 0 ? price.toFixed(1) : "N/A";
-      });
-      return row;
-    });
-    
-    return { matrix, waccCols: waccSteps.map(s => (inputs.wacc + s).toFixed(1)) };
-  }, [inputs]);
+      }
+      .card {
+        background: #ffffff;
+        border-radius: 16px;
+        padding: 16px 18px;
+        box-shadow: 0 10px 25px rgba(15, 23, 42, 0.06);
+      }
+      .card-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: #4b5563;
+        margin-bottom: 10px;
+      }
+      .big-price {
+        font-size: 32px;
+        font-weight: 700;
+      }
+      .tag {
+        font-size: 12px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: #ecfdf3;
+        color: #16a34a;
+        margin-left: 8px;
+      }
+      .metric-row {
+        margin-top: 10px;
+        display: flex;
+        justify-content: space-between;
+        font-size: 13px;
+        color: #4b5563;
+      }
+      .metric-row span.value {
+        font-weight: 600;
+        color: #111827;
+      }
+      .small-muted {
+        margin-top: 10px;
+        font-size: 11px;
+        color: #9ca3af;
+      }
 
+      .key-drivers {
+        margin-top: 24px;
+        display: grid;
+        grid-template-columns: 320px 1fr;
+        gap: 16px;
+      }
+      @media (max-width: 900px) {
+        .key-drivers {
+          grid-template-columns: 1fr;
+        }
+      }
+      .slider-group {
+        margin-bottom: 16px;
+      }
+      .slider-label-row {
+        display: flex;
+        justify-content: space-between;
+        font-size: 13px;
+        margin-bottom: 4px;
+      }
+      .slider-label-main {
+        font-weight: 500;
+      }
+      input[type="range"] {
+        width: 100%;
+      }
+      .slider-range-info {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: #9ca3af;
+        margin-top: 2px;
+      }
 
-  return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans p-4 md:p-8">
-      {/* 头部区域 */}
-      <div className="max-w-7xl mx-auto mb-8 flex flex-col md:flex-row justify-between items-start md:items-center border-b border-slate-200 pb-6">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-2">
-            <Activity className="text-blue-600" />
-            Jonathan Nina & Co Capital DCF 模型
-          </h1>
-          <p className="text-slate-500 mt-1">现金流折现分析与敏感性仪表盘</p>
-        </div>
-        <div className="mt-4 md:mt-0 flex gap-2">
-          {Object.entries(scenarios).map(([key, config]) => (
-            <button
-              key={key}
-              onClick={() => applyScenario(key)}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                scenario === key 
-                  ? 'bg-blue-600 text-white shadow-lg shadow-blue-200' 
-                  : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
-              }`}
-            >
-              {config.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      .table-wrapper {
+        margin-top: 16px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      th,
+      td {
+        border: 1px solid #e5e7eb;
+        padding: 6px 8px;
+        text-align: right;
+      }
+      th {
+        background: #f9fafb;
+        font-weight: 600;
+      }
+      td.label-cell {
+        text-align: left;
+        font-weight: 500;
+        background: #f9fafb;
+      }
+      td.highlight {
+        background: #1d4ed8;
+        color: #ffffff;
+        font-weight: 700;
+      }
+      td.positive {
+        color: #16a34a;
+      }
+      td.negative {
+        color: #b91c1c;
+      }
+      .section-title {
+        font-size: 14px;
+        font-weight: 600;
+        margin-bottom: 6px;
+      }
+      .section-sub {
+        font-size: 11px;
+        color: #9ca3af;
+        margin-bottom: 10px;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: #eff6ff;
+        color: #1d4ed8;
+        margin-bottom: 6px;
+      }
+    </style>
+  </head>
 
-      <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
-        
-        {/* 左侧栏：控制与驱动因素 */}
-        <div className="lg:col-span-4 space-y-6">
-          
-          {/* 主要结果卡片 */}
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-32 h-32 bg-blue-50 rounded-bl-full -mr-10 -mt-10 opacity-50"></div>
-            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-2">隐含股价 (Implied Price)</h2>
-            <div className="flex items-baseline gap-2">
-              <span className="text-5xl font-bold text-slate-900">
-                ${calculation.sharePrice.toFixed(2)}
-              </span>
-              <span className={`text-sm font-medium ${calculation.sharePrice > 25 ? 'text-green-600' : 'text-amber-600'}`}>
-                {calculation.sharePrice > 25 ? '买入评级' : '持有评级'}
-              </span>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useState, useMemo } = React;
+      const {
+        BarChart,
+        Bar,
+        XAxis,
+        YAxis,
+        CartesianGrid,
+        Tooltip,
+        ResponsiveContainer,
+      } = Recharts;
+
+      // 三种情景 + 自定义
+      const SCENARIOS = {
+        base: {
+          label: "基准情景 (Base)",
+          wacc: 10,
+          terminalGrowth: 1,
+          revenueGrowth: 2,
+        },
+        bull: {
+          label: "乐观情景 (Bull)",
+          wacc: 8,
+          terminalGrowth: 2,
+          revenueGrowth: 4,
+        },
+        bear: {
+          label: "悲观情景 (Bear)",
+          wacc: 12,
+          terminalGrowth: 0.5,
+          revenueGrowth: 0.5,
+        },
+        custom: {
+          label: "自定义",
+        },
+      };
+
+      // DCF 计算函数
+      function runDCF(inputs) {
+        const years = 5;
+        const wacc = inputs.wacc / 100;
+        const g = inputs.terminalGrowth / 100;
+        const growth = inputs.revenueGrowth / 100;
+        const baseFCF = inputs.baseFCF;
+
+        let currentFCF = baseFCF;
+        const projectedFCF = [];
+        let pvFCF = 0;
+
+        for (let i = 1; i <= years; i++) {
+          currentFCF = currentFCF * (1 + growth);
+          const discounted = currentFCF / Math.pow(1 + wacc, i);
+          projectedFCF.push({ year: "第 " + i + " 年", fcf: currentFCF });
+          pvFCF += discounted;
+        }
+
+        // 终值（TV）
+        const lastYearFCF = projectedFCF[projectedFCF.length - 1].fcf;
+        const terminalValue =
+          (lastYearFCF * (1 + g)) / (wacc - g > 0.001 ? wacc - g : 0.001);
+        const pvTerminalValue =
+          terminalValue / Math.pow(1 + wacc, years);
+
+        const enterpriseValue = pvFCF + pvTerminalValue;
+        const equityValue = enterpriseValue - inputs.netDebt;
+        const impliedPrice = equityValue / inputs.sharesOutstanding;
+
+        const totalPV = pvFCF + pvTerminalValue;
+        return {
+          projectedFCF,
+          impliedPrice,
+          enterpriseValue,
+          equityValue,
+          periodPct: (pvFCF / totalPV) * 100,
+          termPct: (pvTerminalValue / totalPV) * 100,
+        };
+      }
+
+      // 敏感性矩阵
+      function buildSensitivity(inputs) {
+        const waccSteps = [9, 9.5, 10, 10.5, 11];
+        const gSteps = [0.5, 1.0, 1.5];
+        const rows = [];
+
+        gSteps.forEach((g) => {
+          const row = { g };
+          waccSteps.forEach((w) => {
+            const res = runDCF({
+              ...inputs,
+              wacc: w,
+              terminalGrowth: g,
+            });
+            row[w] = res.impliedPrice;
+          });
+          rows.push(row);
+        });
+
+        return { waccSteps, rows };
+      }
+
+      function formatMoney(num, decimals = 1) {
+        if (!isFinite(num)) return "-";
+        if (Math.abs(num) >= 1_000_000_000) {
+          return (num / 1_000_000_000).toFixed(decimals) + "B";
+        }
+        if (Math.abs(num) >= 1_000_000) {
+          return (num / 1_000_000).toFixed(decimals) + "M";
+        }
+        if (Math.abs(num) >= 1_000) {
+          return (num / 1_000).toFixed(decimals) + "K";
+        }
+        return num.toFixed(decimals);
+      }
+
+      function App() {
+        const [scenarioKey, setScenarioKey] = useState("bear");
+
+        // 这里可以根据公司情况微调参数
+        const [inputs, setInputs] = useState({
+          wacc: SCENARIOS.bear.wacc,
+          terminalGrowth: SCENARIOS.bear.terminalGrowth,
+          revenueGrowth: SCENARIOS.bear.revenueGrowth,
+          baseFCF: 100, // 起始自由现金流 (假设 100M)
+          netDebt: 300, // 净负债
+          sharesOutstanding: 70, // 股本 (M 股)
+        });
+
+        const dcfResult = useMemo(
+          () => runDCF(inputs),
+          [inputs]
+        );
+        const sensitivity = useMemo(
+          () => buildSensitivity(inputs),
+          [inputs]
+        );
+
+        const applyScenario = (key) => {
+          if (key === "custom") {
+            setScenarioKey("custom");
+            return;
+          }
+          const conf = SCENARIOS[key];
+          setScenarioKey(key);
+          setInputs((prev) => ({
+            ...prev,
+            wacc: conf.wacc,
+            terminalGrowth: conf.terminalGrowth,
+            revenueGrowth: conf.revenueGrowth,
+          }));
+        };
+
+        const onChangeField = (field, value) => {
+          setScenarioKey("custom");
+          setInputs((prev) => ({ ...prev, [field]: value }));
+        };
+
+        return (
+          <div className="app">
+            <h1>Jonathan Nina &amp; Co Capital DCF 模型</h1>
+            <div className="sub-title">
+              现金流折现分析与敏感性仪表盘 (示例 Demo，可面试时展示交互效果)
             </div>
-            
-            <div className="mt-6 pt-6 border-t border-slate-100 grid grid-cols-2 gap-4">
-              <div>
-                <div className="text-xs text-slate-500">企业价值 (EV)</div>
-                <div className="text-lg font-semibold text-slate-800">${(calculation.enterpriseValue / 1000).toFixed(1)}B</div>
-              </div>
-              <div>
-                <div className="text-xs text-slate-500">股权价值 (Equity Value)</div>
-                <div className="text-lg font-semibold text-slate-800">${(calculation.equityValue / 1000).toFixed(1)}B</div>
-              </div>
-            </div>
-          </div>
 
-          {/* 驱动因素控制面板 */}
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-            <div className="flex items-center gap-2 mb-6">
-              <Sliders className="w-5 h-5 text-blue-600" />
-              <h3 className="font-bold text-slate-800">核心假设 (Key Drivers)</h3>
+            {/* 情景选择 */}
+            <div className="scenario-tabs">
+              {Object.entries(SCENARIOS).map(([key, conf]) => (
+                <button
+                  key={key}
+                  className={
+                    "scenario-btn" +
+                    (scenarioKey === key ? " active" : "")
+                  }
+                  onClick={() => applyScenario(key)}
+                >
+                  {conf.label}
+                </button>
+              ))}
             </div>
 
-            <div className="space-y-6">
-              {/* WACC 滑块 */}
-              <div>
-                <div className="flex justify-between mb-2">
-                  <label className="text-sm font-medium text-slate-700">WACC (加权平均资本成本)</label>
-                  <span className="text-sm font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">{inputs.wacc.toFixed(1)}%</span>
+            {/* 上方三张卡片 */}
+            <div className="grid-3">
+              {/* 隐含股价 */}
+              <div className="card">
+                <div className="card-title">隐含股价 (IMPLIED PRICE)</div>
+                <div className="big-price">
+                  ${dcfResult.impliedPrice.toFixed(2)}
+                  <span className="tag">持有评级 · Demo</span>
                 </div>
-                <input 
-                  type="range" min="5" max="15" step="0.1" 
-                  value={inputs.wacc} 
-                  onChange={(e) => handleInputChange('wacc', e.target.value)}
-                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                />
-                <div className="flex justify-between text-xs text-slate-400 mt-1">
-                  <span>5%</span>
-                  <span>15%</span>
+                <div className="metric-row">
+                  <span>企业价值 (EV)</span>
+                  <span className="value">
+                    ${formatMoney(dcfResult.enterpriseValue, 1)}
+                  </span>
+                </div>
+                <div className="metric-row">
+                  <span>股权价值 (Equity Value)</span>
+                  <span className="value">
+                    ${formatMoney(dcfResult.equityValue, 1)}
+                  </span>
+                </div>
+                <div className="small-muted">
+                  * 所有数值仅为练习使用的假设数据，用于展示 DCF
+                  建模与可视化能力。
                 </div>
               </div>
 
-              {/* 永续增长率滑块 */}
-              <div>
-                <div className="flex justify-between mb-2">
-                  <label className="text-sm font-medium text-slate-700">永续增长率 (Terminal g)</label>
-                  <span className="text-sm font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">{inputs.terminalGrowth.toFixed(1)}%</span>
-                </div>
-                <input 
-                  type="range" min="0.5" max="5" step="0.1" 
-                  value={inputs.terminalGrowth} 
-                  onChange={(e) => handleInputChange('terminalGrowth', e.target.value)}
-                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-600"
-                />
-              </div>
-
-              {/* 营收增长滑块 */}
-              <div>
-                <div className="flex justify-between mb-2">
-                  <label className="text-sm font-medium text-slate-700">营收复合年增率 (未来5年)</label>
-                  <span className="text-sm font-bold text-purple-600 bg-purple-50 px-2 py-0.5 rounded">{inputs.revenueGrowth.toFixed(1)}%</span>
-                </div>
-                <input 
-                  type="range" min="-5" max="20" step="0.5" 
-                  value={inputs.revenueGrowth} 
-                  onChange={(e) => handleInputChange('revenueGrowth', e.target.value)}
-                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-purple-600"
-                />
-              </div>
-            </div>
-            
-            <div className="mt-6 p-4 bg-slate-50 rounded-lg border border-slate-100 text-xs text-slate-500 leading-relaxed">
-              <span className="font-semibold text-slate-700">洞察：</span> 终值 (Terminal Value) 对 WACC 高度敏感。WACC 每上升 1%，整体估值可能下降 10-15%。
-            </div>
-          </div>
-        </div>
-
-        {/* 右侧栏：图表与分析 */}
-        <div className="lg:col-span-8 space-y-6">
-          
-          {/* 图表区域 */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* 自由现金流预测图 */}
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-               <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
-                <TrendingUp className="w-4 h-4 text-slate-400" />
-                自由现金流预测 (无杠杆)
-              </h3>
-              <div className="h-48">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={calculation.projectedFCF}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="year" tick={{fontSize: 12}} axisLine={false} tickLine={false} />
-                    <YAxis tick={{fontSize: 12}} axisLine={false} tickLine={false} />
-                    <Tooltip 
-                      contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} 
-                      cursor={{fill: '#f1f5f9'}}
+              {/* 自由现金流预测 */}
+              <div className="card">
+                <div className="card-title">自由现金流预测 (无杠杆 FCF)</div>
+                <ResponsiveContainer width="100%" height={170}>
+                  <BarChart data={dcfResult.projectedFCF}>
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      vertical={false}
                     />
-                    <Bar dataKey="fcf" fill="#3b82f6" name="自由现金流 (FCF)" radius={[4, 4, 0, 0]} />
+                    <XAxis
+                      dataKey="year"
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <YAxis
+                      tickLine={false}
+                      axisLine={false}
+                      tickFormatter={(v) => v.toFixed(0)}
+                    />
+                    <Tooltip
+                      formatter={(v) => v.toFixed(1)}
+                      labelFormatter={(l) => l}
+                    />
+                    <Bar dataKey="fcf" radius={[6, 6, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
+
+              {/* 企业价值构成 */}
+              <div className="card">
+                <div className="card-title">
+                  企业价值构成 (基于现值分解)
+                </div>
+                <div className="metric-row">
+                  <span>预测期现值 (5 年)</span>
+                  <span className="value">
+                    {dcfResult.periodPct.toFixed(1)}%
+                  </span>
+                </div>
+                <div className="metric-row">
+                  <span>终值现值 (Terminal Value)</span>
+                  <span className="value">
+                    {dcfResult.termPct.toFixed(1)}%
+                  </span>
+                </div>
+                <div className="small-muted">
+                  终值在大多数 DCF 模型中通常占企业价值的 60%–80%。此 Demo
+                  用来向面试官解释：WACC 与 g 对估值的影响非常敏感。
+                </div>
+              </div>
             </div>
 
-            {/* EV 构成图 */}
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-               <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
-                <PieChart className="w-4 h-4 text-slate-400" />
-                企业价值构成 (基于现值)
-              </h3>
-              <div className="h-48 flex items-center justify-center">
-                 <div className="w-full space-y-4">
-                    <div className="space-y-2">
-                        <div className="flex justify-between text-sm">
-                            <span className="text-slate-600">预测期现值 (5年)</span>
-                            <span className="font-bold text-slate-800">{calculation.mix.fcfPct.toFixed(1)}%</span>
-                        </div>
-                        <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                            <div className="bg-blue-500 h-2 rounded-full" style={{width: `${calculation.mix.fcfPct}%`}}></div>
-                        </div>
-                    </div>
-                    <div className="space-y-2">
-                        <div className="flex justify-between text-sm">
-                            <span className="text-slate-600">终值现值 (Terminal Value)</span>
-                            <span className="font-bold text-slate-800">{calculation.mix.tvPct.toFixed(1)}%</span>
-                        </div>
-                        <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                            <div className="bg-emerald-500 h-2 rounded-full" style={{width: `${calculation.mix.tvPct}%`}}></div>
-                        </div>
-                    </div>
-                    <p className="text-xs text-slate-400 italic mt-2">
-                      通常在健康的 DCF 模型中，终值占企业总价值的 60-80%。
-                    </p>
-                 </div>
+            {/* 下方：Drivers + 敏感性 */}
+            <div className="key-drivers">
+              {/* 左侧：关键假设 */}
+              <div className="card">
+                <div className="badge">核心假设 (Key Drivers)</div>
+                <div className="section-sub">
+                  面试时可以现场拖动滑块，讲解 WACC、永续增长率和收入
+                  CAGR 如何驱动 DCF 输出。
+                </div>
+
+                <div className="slider-group">
+                  <div className="slider-label-row">
+                    <span className="slider-label-main">
+                      WACC (加权平均资本成本)
+                    </span>
+                    <span>{inputs.wacc.toFixed(1)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="5"
+                    max="15"
+                    step="0.5"
+                    value={inputs.wacc}
+                    onChange={(e) =>
+                      onChangeField("wacc", Number(e.target.value))
+                    }
+                  />
+                  <div className="slider-range-info">
+                    <span>5%</span>
+                    <span>15%</span>
+                  </div>
+                </div>
+
+                <div className="slider-group">
+                  <div className="slider-label-row">
+                    <span className="slider-label-main">
+                      永续增长率 (Terminal g)
+                    </span>
+                    <span>{inputs.terminalGrowth.toFixed(1)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.0"
+                    max="3.0"
+                    step="0.1"
+                    value={inputs.terminalGrowth}
+                    onChange={(e) =>
+                      onChangeField(
+                        "terminalGrowth",
+                        Number(e.target.value)
+                      )
+                    }
+                  />
+                  <div className="slider-range-info">
+                    <span>0%</span>
+                    <span>3%</span>
+                  </div>
+                </div>
+
+                <div className="slider-group">
+                  <div className="slider-label-row">
+                    <span className="slider-label-main">
+                      营收复合年增长率 (未来 5 年)
+                    </span>
+                    <span>{inputs.revenueGrowth.toFixed(1)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="5"
+                    step="0.5"
+                    value={inputs.revenueGrowth}
+                    onChange={(e) =>
+                      onChangeField(
+                        "revenueGrowth",
+                        Number(e.target.value)
+                      )
+                    }
+                  />
+                  <div className="slider-range-info">
+                    <span>0%</span>
+                    <span>5%</span>
+                  </div>
+                </div>
+
+                <div className="small-muted">
+                  说明思路示例：
+                  “我用一个完全自建的交互式 DCF 仪表盘来分析交易，内部把
+                  WACC、g 和增长率作为核心驱动因子，通过滑块和敏感性表瞬间看到估值变化，方便和
+                  MD / VP 讨论不同情景假设。”
+                </div>
+              </div>
+
+              {/* 右侧：敏感性表 */}
+              <div className="card">
+                <div className="section-title">敏感性分析：股价</div>
+                <div className="section-sub">
+                  行：终值增长率 (g) · 列：WACC，便于快速看到“高增长 + 低折现率”对估值的放大效应。
+                </div>
+
+                <div className="table-wrapper">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th className="label-cell">g / WACC</th>
+                        {sensitivity.waccSteps.map((w) => (
+                          <th key={w}>{w.toFixed(1)}%</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sensitivity.rows.map((row) => (
+                        <tr key={row.g}>
+                          <td className="label-cell">
+                            {row.g.toFixed(1)}%
+                          </td>
+                          {sensitivity.waccSteps.map((w) => {
+                            const val = row[w];
+                            const diff =
+                              ((val - dcfResult.impliedPrice) /
+                                dcfResult.impliedPrice) *
+                              100;
+                            const isCenter =
+                              Math.abs(w - inputs.wacc) < 0.001 &&
+                              Math.abs(row.g - inputs.terminalGrowth) <
+                                0.001;
+                            const cls =
+                              " " +
+                              (isCenter
+                                ? "highlight"
+                                : diff >= 0
+                                ? "positive"
+                                : "negative");
+                            return (
+                              <td key={w} className={cls.trim()}>
+                                ${val.toFixed(1)}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="small-muted">
+                  面试时可以指着中心蓝色格子说：
+                  “当前假设下的隐含价格在这里；如果 WACC 上升 100bps
+                  或 g 下调 50bps，估值会如何移动”，展示你对估值敏感性的理解。
+                </div>
               </div>
             </div>
           </div>
+        );
+      }
 
-          {/* 敏感性分析 (Football Field 矩阵) */}
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-              <h3 className="font-bold text-slate-800">敏感性分析：股价</h3>
-              <span className="text-xs font-mono bg-slate-100 px-2 py-1 rounded text-slate-500">行：永续增长率 | 列：WACC</span>
-            </div>
-            
-            <div className="p-0 overflow-x-auto">
-              <table className="w-full text-center text-sm">
-                <thead>
-                  <tr className="bg-slate-50 text-slate-500">
-                    <th className="p-3 font-medium text-left pl-6 border-r border-slate-200">增长率 \ WACC</th>
-                    {sensitivityMatrix.waccCols.map(w => (
-                      <th key={w} className={`p-3 font-medium ${parseFloat(w) === inputs.wacc ? 'text-blue-600 font-bold bg-blue-50' : ''}`}>
-                        {w}%
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {sensitivityMatrix.matrix.map((row, idx) => (
-                    <tr key={idx} className={parseFloat(row.growth) === inputs.terminalGrowth ? 'bg-emerald-50' : ''}>
-                      <td className={`p-3 font-medium text-left pl-6 border-r border-slate-200 ${parseFloat(row.growth) === inputs.terminalGrowth ? 'text-emerald-700 font-bold' : 'text-slate-600'}`}>
-                        {row.growth}%
-                      </td>
-                      {sensitivityMatrix.waccCols.map(w => {
-                        const val = parseFloat(row[`wacc_${w}`]);
-                        // 颜色刻度逻辑 (简化版)
-                        let cellClass = "text-slate-700";
-                        if(val > calculation.sharePrice * 1.1) cellClass = "text-green-600 font-medium bg-green-50/50";
-                        if(val < calculation.sharePrice * 0.9) cellClass = "text-red-500 font-medium bg-red-50/50";
-                        if(parseFloat(w) === inputs.wacc && parseFloat(row.growth) === inputs.terminalGrowth) cellClass = "bg-blue-600 text-white font-bold rounded shadow-sm scale-110 transform";
-                        
-                        return (
-                          <td key={w} className="p-3">
-                            <div className={`py-1 px-2 rounded ${cellClass}`}>
-                              ${val}
-                            </div>
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export default DCFModel;
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
